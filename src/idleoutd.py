@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
 """  Marcos Moyano - marcos@anue.biz
 
@@ -11,50 +11,41 @@
  the Free Software Foundation.
 """
 
-__revision__ = "$Id: idleoutd 2007-6-11 $"
-import os, sys, smtplib
+__author__ = "Marcos Moyano"
+__revision__ = "$Id: idleoutd 2013-13-04 $"
+
+import os
+import sys
+import smtplib
+import signal
+import subprocess
+import argparse
 from time import sleep
-from re import compile as comp
-from re import match
+from configobj import ConfigObj
+
 from logging import fatal, info, warning, DEBUG, getLogger, Formatter
 from logging.handlers import RotatingFileHandler
 
 G_FILE = "/etc/group"
 P_FILE = "/etc/passwd"
+CONFIG_FILE = "/etc/idleout/idleout.conf"
 
-### Necesary data ###
-USR_BY_NAME = {}
-GROUP_BY_NAME = {}
-PROCS = {}
-NO_BANN = []
-BANN = {}
+PRINTVERSION = "0.9.0"
 PRINTINFO = 0
-PRINTVERSION = "0.8.1"
-LOG_FLAG = 0
 
-####################
-# Manage arguments #
-####################
-if len(sys.argv[1:]) == 1:
-    DEBUGG = sys.argv[1]
-    if DEBUGG == "-D" or DEBUGG == "-d" or DEBUGG == "--debug":
-        PRINTINFO = 1
-    elif DEBUGG == "-h" or DEBUGG == "--help":
-        printhelp()
-        sys.exit(0)
-    elif DEBUGG == "-v" or DEBUGG == "-V" or DEBUGG == "--version":
-        print ("idleoutd version is: %s \n" % PRINTVERSION)
-        sys.exit(0)
-    else:
-        print ("idleoutd: Invalid argument -- %s\n\
-    Try 'idleoutd -h' or 'idleoutd --help' for more information." % DEBUGG)
-        sys.exit(1)
-elif len(sys.argv[1:]) > 1:
-    print ("To many arguments: %d recieved, 1 expected.\n\
-    Try 'idleoutd -h' or 'idleoutd --help'" % len(sys.argv[1:]))
-    sys.exit(1)
 
-#### End of manage arguments ####
+parser = argparse.ArgumentParser(prog='idleoutd',
+                                 description='Parse idleoutd command line options')
+parser.add_argument('--debug', '-d',
+                    action='store_true', dest='DEBUG',
+                    help='Print debug information')
+parser.add_argument('--version', '-v', dest='version',
+                    action='store_const', const=PRINTVERSION,
+                    help='Show version and exist')
+parser.add_argument('--conf', '-c', dest='config',
+                    action='store',
+                    help='Use another configuration file')
+
 
 ##################
 # Print Help Msg #
@@ -76,549 +67,420 @@ Report bugs to <marcos@anue.biz>."""
 
 #### End of print help ####
 
+w_tpl = """\n\r\n<<< MESSAGE FROM IDLEOUT >>>\n\n\
+\r\tYou have been idle for too long.\n\
+\r\tIf you don't send an alive signal in the next {0} minutes you will be kicked out!\n\n\
+\r<<<    END OF MESSAGE    >>>\n\n"""
 
-######################
-# Define logging way #
-######################
-def logg(LOG_FILE, LOG_SIZE):
-    """
-    Configuration of the log file.
-    """
-    RLOG = getLogger('')
-    handler = RotatingFileHandler(LOG_FILE, 'a', LOG_SIZE * 1024 * 1024, 10)
-    RLOG.addHandler(handler)
-    RLOG.setLevel(DEBUG)
-    formatter = Formatter('%(asctime)s: %(levelname)-8s %(message)s','%b %d %H:%M:%S')
-    handler.setFormatter(formatter)
-    return
+k_tpl = """\n\r\n<<< MESSAGE FROM IDLEOUT >>> \n\n\
+\r\tYour {0} minutes has expired.\n\
+\r\tKicking out user: {1}\n\n\
+\r<<<    END OF MESSAGE    >>>\n\n"""
 
-#### End of define logging ####
 
-##################
-# Get group info #
-##################
-def fetch_group(group, param):
-    '''
-    Fetch all the users in /etc/passwd with the same group id as "group".
-    '''
-    tmp = []
-    gid = ""
-    mygfile = open(G_FILE,'r')
-    for lines in mygfile.readlines():
-        line = lines.strip()
-        name = line.split(':')[0]
-        if group == name:
-            gid = line.split(':')[2]
-            break
-    mygfile.close()
-    mypfile = open(P_FILE,'r')
-    for lines in mypfile.readlines():
-        line = lines.strip()
-        guid = line.split(':')[3]
-        if gid == guid:
-            tmp.append(line.split(":")[0])
-    mypfile.close()
-    GROUP_BY_NAME[group] = (tmp, param)
-    return (GROUP_BY_NAME)
+class Connection(object):
+    """A single connection object. Holds information about the user, tty
+    device, idle time, connection process and the configuration options
+    for that particular user"""
+    def __init__(self, user, tty, msg, idle_time, proc, idle_config, grace, silent, mail):
+        self.user = user
+        self.tty = tty
+        self.msg = msg
+        self.idle_time = self.parse_time(idle_time)
+        self.proc = int(proc)
+        self.idle_config = int(idle_config)
+        self.grace = int(grace)
+        self.silent = silent.lower() == 'yes'
+        self.mail = mail.lower() == 'yes'
 
-#### End of get group info ####
+    def __str__(self):
+        return self.__unicode__()
 
-#################
-# Group defined #
-#################
-def group_define(spar, param):
-    """
-    Fetch users from the specified group.
-    """
-    idle_time = param[0].split("=")[1]
-    GROUP_BY_NAME = fetch_group(spar, param)
-    try:
-        filed = open(G_FILE,'r')
-        for lines in filed.readlines():
-            line = lines.strip()
-            if spar == str(line.split(':')[0]):
-                tmp = line.split(':')
-                groups = tmp[len(tmp)-1]
-        filed.close()
-        lofusr = GROUP_BY_NAME[spar][0]
-        groups = groups.split(',')
-        for x in lofusr:
-            if x not in groups:
-                groups.append(x)
-        if int(idle_time) == 0:
-            for x in groups:
-                if x not in NO_BANN:
-                    NO_BANN.append(x)
-                for y in GROUP_BY_NAME.keys():
-                    if x in GROUP_BY_NAME[y][0]:
-                        GROUP_BY_NAME[y] = (GROUP_BY_NAME[y][0][1:], param)
-                    if GROUP_BY_NAME[y][0] == []:
-                        del GROUP_BY_NAME[y]
-        else:
-            for usr in groups:
-                if usr not in NO_BANN:
-                    GROUP_BY_NAME[spar] = (groups, param)
-    except Exception, err:
-        warning("%s -> %s " % (err.__class__ , err))
-        warning("I was unable to open file %s." % G_FILE)
+    def __unicode__(self):
+        return u"{0} on {1} \t msg:{2} \t idle:{3} \t proc:{4}".format(
+            self.user, self.tty, self.msg, self.idle_time, self.proc
+        )
 
-#### end of group definded ####
+    @staticmethod
+    def parse_time(t):
+        """Given a string like 00:04 representing hours and minutes we
+        return the number of minutes (ie: 4)
+        """
+        return 0 if t == "." else int(t.split(":")[0]) * 60 + int(t.split(":")[1])
 
-################
-# User defined #
-################
-def usr_define(spar, param):
-    """
-    Fetch the specified user.
-    """
-    try:
-        filed = open(P_FILE,'r')
-        for lines in filed.readlines():
-            line = lines.strip()
-            user = str(line.split(':')[0])
-            if spar == user:
-                itime = int(param[0].split('=')[1])
-                if itime == 0:
-                    if spar not in NO_BANN:
-                        NO_BANN.append(spar)
-                else:
-                    if spar in NO_BANN:
-                        NO_BANN.remove(spar)
-                    USR_BY_NAME[spar] = param
-        filed.close()
-        if spar not in USR_BY_NAME.keys() and spar not in NO_BANN:
-            info("Config file --> User %s is not defined in system." % spar)
-    except Exception, err:
-        warning("%s -> %s " % (err.__class__ , err))
-        warning("I was unable to open file %s." % P_FILE)
-
-#### end of user definded ####
-
-##################
-#    Get info    #
-##################
-def get_info(LOG_FLAG):
-    """
-    Parse the configuration file.
-    """
-    try:
-        from idleoutconf import log, logsize, pid, host, port, domain
-        from idleoutconf import group, name
-        if LOG_FLAG != 1:
-            logg(log, int(logsize))
-            # Don't open another logging instance!
-            LOG_FLAG = 1
-        global smtp
-        smtp = [host, int(port), domain]
-        reg1 = comp('(\s+)\=(\s+)')
-        for users in name:
-            users = reg1.sub("=", users.strip())
-            usrtmp = users.split()
-            usrname = usrtmp[0]
-            rest = usrtmp[1:]
-            usr_define(usrname, rest)
-        for groups in group:
-            groups = reg1.sub("=", groups.strip())
-            grtmp = groups.split()
-            groupname = grtmp[0]
-            rest = grtmp[1:]
-            group_define(groupname, rest)
-        return(pid)
-    except Exception, err:
-        print >> sys.stderr, "Error: %d: %s" % (err.errno, err.strerror)
-        sys.exit(err.errno)
-
-#### end get info ####
-
-##################
-#  Compute info  #
-##################
-def compute(process):
-    """
-    Manage all the information and call the require events.
-    """
-    tmp = [x for x, y in BANN.iteritems() if x not in process.keys()]
-    for x in tmp:
-        del BANN[x]             	# Clean people who got back
-    for x, y in process.iteritems():
-        user = x.split(',')[0]
-        dev = x.split(',')[1]
-        time = int(y[0])
-        # Search in user define dictionary
-        if USR_BY_NAME.has_key(user):
-            idtm = int(USR_BY_NAME[user][0].split('=')[1])
-            if time >= idtm:
-                grace = int(USR_BY_NAME[user][1].split('=')[1])
-                silent = USR_BY_NAME[user][3].split('=')[1]
-                if x in BANN.keys():
-                    if BANN[x] >= grace:
-                        del BANN[x]
-                        if silent == "no":
-                            bann_usr(x, y[1], grace, 0)  # Bann the user
-                        else:
-                            # Bann the user with silent
-                            bann_usr(x, y[1], grace, 1)
-                        mail = USR_BY_NAME[user][2].split('=')[1]
-                        if mail == "yes":
-                            send_mail(user, dev)
-                    else:
-                        BANN["%s" % x] = int(BANN[x]) + 1
-                else:
-                    ret = checkcon(x)
-                    if ret == 0:
-                        BANN["%s" % x] = 1
-                        if silent == "no":
-                            notify(user, dev, grace)   # Notify the user
-                    else:
-                        # No ssh session - Banning with silent
-                        bann_usr(x, y[1], grace, 1)
-            else:
-                if x in BANN.keys():
-                    del BANN[x]
-        else:
-            """
-            Group search:
-            We'll grab the lowest idle configuration available. In addition we'll grab the
-            corresponding grace and mail configuration for that particular user.
-            By default we set the mail configuration to "no". If it needs to change it will do so.
-    	    """
-        # Big number just to make sure idle time is lower in the first run
-            loweridt = 1000
-            lowgrace = 0
-            lowmail = "no"
-            silent = "no"
-        # Search in group define dictionary for the lowest idle time.
-            for j, k in GROUP_BY_NAME.iteritems():
-                if user in k[0]:
-                    idtm = int(GROUP_BY_NAME[j][1][0].split('=')[1])
-                    if idtm < loweridt:
-                        loweridt = idtm
-                        lowgrace = int(GROUP_BY_NAME[j][1][1].split('=')[1])
-                        lowmail = GROUP_BY_NAME[j][1][2].split('=')[1]
-                        silent = GROUP_BY_NAME[j][1][3].split('=')[1]
-            if time >= loweridt:
-                if x in BANN.keys():
-                    if BANN[x] >= lowgrace:
-                        del BANN[x]
-                        if silent == "no":
-                            bann_usr(x, y[1], lowgrace, 0)  # Bann the user
-                        else:
-                        # Bann the user with silent
-                            bann_usr(x, y[1], lowgrace, 1)
-                        if lowmail == "yes":
-                            send_mail(user, dev)
-                    else:
-                        BANN["%s" % x] = int(BANN[x]) + 1
-                else:
-                    ret = checkcon(x)
-                    if ret == 0:
-                        BANN["%s" % x] = 1
-                        if silent == "no":
-                            notify(user, dev, lowgrace)   # Notify the user
-                    else:
-                        bann_usr(x, y[1], lowgrace, 1)
-            else:
-                if x in BANN.keys():
-                    del BANN[x]
-
-#### End of compute ####
-
-##################
-#   Notify user  #
-##################
-def notify(user, dev, grace):
-    """
-    Notify the user that he is going to be kicked out.
-    """
-    fdr = "/dev/"+dev
-    seconds = grace*60
-    try:
-        tonot = open(fdr,'a')
-        tonot.write("\n\r\n<<< MESSAGE FROM IDLEOUT >>>\n\n\
-        \r\tYou have been idle for too long.\n\
-        \r\tIf you don't send an alive signal in the next %d seconds you will be kicked out!\n\n\
-\r<<<    END OF MESSAGE    >>>\n\n" % seconds)
-        tonot.close()
-        warning("USER %s idle on DEVICE %s --> NOTIFYING!" % (user, dev))
-    except Exception, err:
-        warning("%s -> %s " % (err.__class__ , err))
-        warning("I was unable to open device %s." % fdr)
-
-#### end of notify user ####
-
-##########################
-#  check ssh connection  #
-##########################
-def checkcon(info):
-    """
-    Look for the sshd process of the specified user in the specified device.
-    """
-    user = info.split(',')[0]
-    device = info.split(',')[1]
-    sshd = os.popen("ps -ef | grep %s | grep %s | grep sshd | grep -v \"grep\" | head -n 1" % (device, user), 'r')
-    sshd = sshd.read()
-    if sshd:
-        sshd = sshd.strip().split()
-    else:
-        warning("USER %s not on DEVICE %s --> KICKING OUT!" % (user, device))
-        return (1)
-    if sshd[5] == "?" and sshd[7] == "sshd:":
-        if sshd[8].strip() == "%s@%s" % (user.strip(), device.strip()):
-            return (0) # Found ssh session
-        else:
-            return (1) # There is no ssh session for the user in the device.
-
-#### End of checkcon ####
-
-###############
-#  Bann user  #
-###############
-def bann_usr(user, pids, seconds, silent):
-    """
-    Kick out the specified user.
-    """
-    usr = user.split(',')[0]
-    device = user.split(',')[1]
-    seconds = int(seconds)*60
-    fdr = "/dev/"+device
-    warning("USER %s --> timeout on DEVICE %s --> KICKING OUT!" % (usr, device))
-    if int(silent) == 0:
+    @staticmethod
+    def check_smtp(host, port):
+        """Check for the SMTP service."""
         try:
+            server = smtplib.SMTP(host, port)
+        except Exception, err:
+            warning("{0} -> Exit code {1} -> Message: {2}".format(
+                err.__class__ ,
+                err[0], err[1])
+            )
+            return(1)
+        server.quit()
+        return(0)
+
+    def writeable(self):
+        """Returns True or False if ths connection can receive messages"""
+        return self.msg == "+"
+
+    def should_finish(self):
+        """Return True if the idle time is longer than t"""
+        if self.idle_config == 0: return False
+        return self.idle_time >= self.idle_config + self.grace
+
+    def should_warn(self):
+        """Return True if the idle time is longer than t"""
+        if self.idle_config == 0: return False
+        return (self.idle_time > self.idle_config) and (
+            self.idle_time < self.idle_config + self.grace
+        )
+
+    def email(self, host, port, domain):
+        """Send an email to the user about what's going on"""
+        if not self.mail: return
+        ecode = self.check_smtp(host, port)
+        if ecode != 0:
+            warning("An SMTP error ocurred. NOT sending email.")
+            return
+        if domain.lower() != "none":
+            toaddrs  = "%s@%s" % (self.user, domain)
+            fromaddr = "%s@%s" % ("idleout", domain)
+        else:
+            toaddrs  = self.user
+            fromaddr = "idleout"
+        line = """You have been idle for too long.\n\
+        Idleout has decided to terminate your conection on device {0}.\n""".format(self.tty)
+        msg = "From: {0}\r\nTo: {1}\r\n\r\n{2}".format(fromaddr, toaddrs, line)
+        try:
+            server = smtplib.SMTP(host, port)
+            server.set_debuglevel(0)
+            server.sendmail(fromaddr, toaddrs, msg)
+            server.quit()
+            info("Email sent to user {0}".format(self.user))
+        except Exception, err:
+            warning("%s -> Exit code %s -> Message: %s" % (err.__class__ , err[0], err[1]))
+            warning("An SMTP error ocurred. NOT sending email.")
+
+    def write(self, txt):
+        """Write a message to this connection"""
+        warning("USER %s idle on DEVICE %s --> NOTIFYING!" % (self.user, self.tty))
+        if self.writeable():
+            p1 = subprocess.Popen(["echo", txt], stdout=subprocess.PIPE)
+            p2 = subprocess.Popen(["write", self.user, self.tty],
+                                  stdin=p1.stdout, stdout=subprocess.PIPE)
+            p1.stdout.close()
+            _, std_err = p2.communicate()
+            return std_err
+        # Not writeable, let's try to force a message
+        try:
+            fdr = "/dev/" + self.tty
             tonot = open(fdr,'a')
-            tonot.write("\n\r\n<<< MESSAGE FROM IDLEOUT >>> \n\n\
-	    \r\tYour %s seconds has expired.\n\
-	    \r\tKicking out user: %s\n\n\
-\r<<<    END OF MESSAGE    >>>\n\n" % (seconds, usr))
+            tonot.write(txt)
             tonot.close()
         except Exception, err:
             warning("%s -> %s " % (err.__class__ , err))
             warning("I was unable to open device %s." % fdr)
-    for process in pids.split():
-        process = int(process)
+
+    def terminate(self):
+        """Terminate this connection"""
+        warning("USER {0} --> timeout on DEVICE {1} --> KICKING OUT!".format(
+            self.user, self.tty
+        ))
+        if not self.silent:
+            txt = k_tpl.format(self.grace, self.user)
+            self.write(txt)
         try:
-            os.kill(process, 9)
-        except Exception, e:
-            warning("%s -> %s " % (e.__class__ , e))
-            warning("Process don't exist or error killing it (%d)" % process)
+            os.kill(self.proc, signal.SIGTERM)
+        except OSError:
+            os.kill(self.proc, signal.SIGKILL)
 
-#### End of bann user ####
+    def warn(self):
+        """Warn the user about what's going on"""
+        if not self.silent:
+            txt = w_tpl.format(self.grace)
+            self.write(txt)
 
-#############
-# Get pids  #
-#############
-def get_pids(idle_pos, name_pos, dev_pos):
+
+class ConfigHolder(object):
+    """Holds configuration options such as pidfile, smtp, definition
+    options and so forth.  Also, it has some helper functions like get
+    all the users from a given group or configure the logging system
+
     """
-    Find the idle info and processes of the users currently logged in.
-    """
-    PROCS = {}
-    info1 = os.popen("finger | cut -c %s,%s,%s | sed 1d | egrep -v \"\*:0\" | sort | uniq" % (name_pos, dev_pos, idle_pos), "r")
-    for line in info1:
-        c = line.split()
-    # Added to check differences between distros. Distros like SuSE use this.
-        if "*" == c[1][0]:
-            c[1] = c[1][1:]
-        if c[0] not in NO_BANN:
-            if len(c) == 3:
-                try:
-                    t = int(c[2])
-                except ValueError:
-                    if ":" in c[2]:
-                        t = c[2].strip()
-                        t = int(t.split(':')[0])*60 + int(t.split(':')[1])
-                    elif "d" in c[2]:
-                        t = c[2].strip()
-                        t = int(t)*60*24
-                lo = os.popen("ps -eo \"%s\" | awk '{print $3 \" \" $1 \" \" $2}' | grep %s | grep %s | egrep -v \"grep\" | awk '{print $2}' | xargs" % ("%p %y %U", c[0], c[1]), "r")
-                for li in lo.readlines():
-                    li = li.strip()
-                    info("USER: %s --> DEVICE: %s --> IDLE TIME: %s --> PROCESSES: %s" % (c[0], c[1], str(t), li))
-                    PROCS["%s,%s" % (c[0], c[1])] = (t, li)
-    return(PROCS)
+    def __init__(self, path):
+        self.path = path
+        self.config = ConfigObj(path)
+        self.group = "/etc/group"
+        self.passwd = "/etc/passwd"
+        self.groups = {}
+        self.users = {}
+        self.host = self.get('SMTP', 'host')
+        self.port = self.get('SMTP', 'port')
+        self.domain = self.get('SMTP', 'domain')
 
-#### end of get_pids ####
+    @staticmethod
+    def get_time_frame(obj):
+        """Return the entire time frame for a configuration option"""
+        if obj.get('idle') == 0: return 0
+        return obj.get('idle') + obj.get('grace')
 
-##########################
-# Check for SMTP service #
-##########################
-def check_smtp():
-    """
-    Check for the SMTP service.
-    """
-    try:
-        server = smtplib.SMTP(smtp[0], smtp[1])
-    except Exception, err:
-        warning("%s -> Exit code %s -> Message: %s" % (err.__class__ , err[0], err[1]))
-        return(1)
-    server.quit()
-    return(0)
+    def get(self, section, name=None):
+        """"Returns the value of name under section. If no name is
+        given, return the entire section"""
+        if name:
+            return self.config.get(section).get(name)
+        return self.config.get(section)
 
-#### end of check SMTP ####
+    def config_logger(self):
+        logfile = self.get('LOGFILE', 'log')
+        logsize = self.get('LOGFILE', 'logsize')
+        logger = getLogger('')
+        handler = RotatingFileHandler(logfile, 'a', logsize * 1024 * 1024, 10)
+        logger.addHandler(handler)
+        logger.setLevel(DEBUG)
+        formatter = Formatter('%(asctime)s: %(levelname)-8s %(message)s','%b %d %H:%M:%S')
+        handler.setFormatter(formatter)
 
-#############
-# Send mail #
-#############
-def send_mail(user, dev):
-    """
-    Send an email to the specified user explaining the situation.
-    """
-    ecode = check_smtp()
-    if ecode != 0:
-        warning("An SMTP error ocurred. NOT sending email.")
-        return
-    pid = os.fork()
-    if pid > 0:
-        sys.exit(0)
-    domain = smtp[2]
-    if domain.lower() != "none":
-        toaddrs  = "%s@%s" % (user, domain)
-        fromaddr = "%s@%s" % ("idleout", domain)
-    else:
-        toaddrs  = user
-        fromaddr = "idleout"
-    line = "You have been idle for too long.\n\
-    Idleout has decided to terminate your conection on device %s.\n" % dev
-    msg = ("From: %s\r\nTo: %s\r\n\r\n%s" % (fromaddr, toaddrs, line))
-    try:
-        server = smtplib.SMTP(smtp[0], smtp[1])
-        server.set_debuglevel(0)
-        server.sendmail(fromaddr, toaddrs, msg)
-        server.quit()
-        info("Email sent to user %s" % user )
-    except Exception, err:
-        warning("%s -> Exit code %s -> Message: %s" % (err.__class__ , err[0], err[1]))
-        warning("An SMTP error ocurred. NOT sending email.")
+    def get_users_from_group(self, group):
+        """Get all the system users from a given group"""
+        if group in self.groups:
+            return self.groups.get(group)
+        groupfile = open(self.group).readlines()
+        gid = None
+        users = []
+        for l in groupfile:
+            if l.split(":")[0] == group:
+                gid = l.split(":")[2]
+                users += l.strip().rsplit(":", 1)[-1].split(",")
+                break
+        passwordfile = open(self.passwd).readlines()
+        for user in passwordfile:
+            guid = user.split(":")[3]
+            if guid == gid:
+                users.append(user.split(":")[0])
+        users = list(set(users))
+        self.groups[group] = users
+        return users
 
-#### end of send_mail ####
+    def config_for_user(self, user):
+        """Get configuration options for a given user. Looks for in
+        both users and groups.  if there is a user definition, it will
+        override any group definition.
+        If a user belongs to 2 different groups the lower is returned"""
+        if user in self.users:
+            return self.users.get(user)
+        user_config = self.get('USERS', user)
+        if user_config:
+            self.users[user] = user_config
+            return user_config
+        # Check for dup confs and return the lower one (even 0)
+        groups = self.config.get('GROUPS').keys()
+        gconfig = None
+        for group in groups:
+            users = self.get_users_from_group(group)
+            if user in users:
+                tmp_cfg = self.get('GROUPS', group)
+                time_frame = self.get_time_frame(tmp_cfg)
+                if time_frame == 0:
+                    self.users[user] = tmp_cfg
+                    return tmp_cfg
+                if not gconfig or time_frame < self.get_time_frame(gconfig):
+                    gconfig = tmp_cfg
+        if gconfig:
+            self.users[user] = gconfig
+            return gconfig
+        return None
 
-#####################
-# Get Idle position #
-#####################
-def get_pos():
-    '''
-    Function to find the locations of "Name", "Tty" and "Idle" from the finger command.
-    '''
-    idle = os.popen("finger | head -n 1", "r")
-    line = idle.readline().strip()
-    tmp = line.find("Idle") + 1
-    idle_pos = str("%d-%d" % (tmp - 1, tmp + 4))
-    tmp = line.find("Name")
-    name_pos = str("%d-%d" % (1, tmp))
-    tmp = line.find("Tty")
-    dev_pos = str("%d-%d" % (tmp, tmp + 7))
-    return(idle_pos, name_pos, dev_pos)
 
-#### End of get_pos ####
+class ConnectionHandler(object):
+    """Handles all user connections and holds the configuration options"""
+    def __init__(self, config_file):
+        self.config = config_file
+        self.connections = {}
+        self.warned = {}
 
-####################
-# Print debug info #
-####################
-def prinfo(PROCS, usr_name, group_name, nobann, ybann, smtp):
-    """
-    Print the DEBUG information.
-    """
-    print "                  <<<<< DEBUG MODE >>>>> "
-    print "---------------------------------------------------------"
-    print "      <<< SMTP DIRECTIVES FROM CONFIG FILE >>>\n"
-    host = smtp[0]
-    port = smtp[1]
-    domain = smtp[2]
-    print ("HOST: %s --> PORT: %d --> DOMAIN: %s" % (host, port, domain))
-    print "---------------------------------------------------------"
-    print "      <<< USER DIRECTIVES FROM CONFIG FILE >>>"
-    for name in usr_name.keys():
-        print ("USER: %s " % name)
-        tmp = " ".join(usr for usr in usr_name[name])
-        print ("CONFIGURATION: %s" % tmp)
-    print "---------------------------------------------------------"
-    print "      <<< GROUP DIRECTIVES FROM CONFIG FILE >>>"
-    for group in group_name.keys():
-        print ("GROUP: %s" % group)
-        tmp = " ".join(usr for usr in group_name[group][0])
-        tmp1 = " ".join(conf for conf in group_name[group][1])
-        print ("USERS IN GROUP: %s" % tmp)
-        print ("CONFIGURATION: %s" % tmp1)
-        print "---------------------------------------"
-    tmp = " ".join(usr for usr in nobann)
-    print "---------------------------------------------------------"
-    print ("USERS THAT WILL NEVER BE KICKED OUT: %s" % tmp)
-    print "---------------------------------------------------------"
-    print "IDLE USERS: "
-    for info in PROCS.keys():
-        user = info.split(',')[0]
-        dev = info.split(',')[1]
-        time = PROCS[info][0]
-        print ("USER: %s --> DEVICE: %s --> IDLE TIME: %s" % (user, dev, time))
-    print "---------------------------------------------------------"
-    print "      <<< PROCESSES OF IDLE USERS: >>>\n"
-    for info in PROCS.keys():
-        user = info.split(',')[0]
-        dev = info.split(',')[1]
-        pro = PROCS[info][1]
-        print ("USER: %s --> DEVICE: %s --> PROCESSES: %s" % (user , dev, pro))
-    print "---------------------------------------------------------"
-    print "<<< GRACE: USERS THAT WILL (eventually) BE KICKED OUT >>>\n"
-    for info in ybann.keys():
-        user = info.split(',')[0]
-        dev = info.split(',')[1]
-        gra = ybann[info]
-        print ("USER: %s --> DEVICE: %s --> GRACE MINUTE: %s" % (user, dev, gra))
-    print "\n#########################################################"
-    print "            <<< Sleeping for 60 seconds >>> "
-    print "#########################################################\n"
+    def __str__(self):
+        return self.__unicode__()
 
-#### End of prinfo ####
+    def __unicode__(self):
+        return u"{0} connections".format(len(self.connections))
 
-###########
-#  MAIN   #
-###########
-def main():
-    """
-    Main function.
-    """
-    try:
-        count = 1
-    # Just at the beginning to get positions in finger.
-    #These positions changes between distros.
-        (id_pos, name_pos, dev_pos) = get_pos()
-        while True:
-            if count == 30:
-                count = 1
-        # Read conf file at start and every 30 minutes
-                get_info(LOG_FLAG)
+    def add(self, con, warned=False):
+        """Add a new connection to the list of connections"""
+        if warned:
+            self.warned[con.tty] = con
+        else:
+            self.connections[con.tty] = con
+
+    def update(self, con):
+        """Update a warned connection"""
+        self.warned[con.tty] = con
+
+    def get_connection(self, tty, warned=False):
+        """Get a connection based on the tty device"""
+        if warned:
+            return self.warned.get(tty, None)
+        return self.connections.get(tty, None)
+
+    def already_warned(self, tty):
+        """Return True if the tty was already warned"""
+        return tty in self.warned
+
+    def remove(self, tty):
+        """Remove a given warned connection based on the tty"""
+        if tty in self.warned:
+            del(self.warned[tty])
+
+    @staticmethod
+    def get_system_connections():
+        """Get system connections. Returns a list of dictionaries:
+        [{'login': login, 'msg': msg, 'tty': tty,
+          'idle': idle, 'proc': proc}, ...]"""
+        who = subprocess.Popen(['who', '-u', '-w'],
+                               stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT)
+        connections = []
+        for out in who.stdout:
+            login, msg, tty, date, time, idle, proc, comment  = out.strip().split()
+            connections.append({'login': login,
+                                'msg': msg,
+                                'tty': tty,
+                                'idle': idle,
+                                'proc': proc})
+        return connections
+
+    def _split_connections(self):
+        """Build three lists of devices.
+        remove_ttys: warned connections that should be removed from tracking
+        update_ttys: warned connections that should be updated
+        new_ttys: new connections found on the system
+        """
+        ttys = set(self.connections.keys())
+        warned_ttys = set(self.warned.keys())
+        self.remove_ttys = list(warned_ttys.difference(ttys))
+        self.update_ttys = list(ttys & warned_ttys)
+        self.new_ttys = list(ttys.difference(warned_ttys))
+
+    def _refresh(self):
+        """Refresh the list of all connections"""
+        self.connections = {}
+        connections = self.get_system_connections()
+        for con_info in connections:
+            user = con_info.get('login')
+            user_config = self.config.config_for_user(user)
+            if user_config:
+                self.add(Connection(user, con_info.get('tty'), con_info.get('msg'),
+                                    con_info.get('idle'), con_info.get('proc'),
+                                    user_config.get('idle'),
+                                    user_config.get('grace'),
+                                    user_config.get('silent'),
+                                    user_config.get('mail')))
+        self._split_connections()
+
+    def _process(self):
+        """Process connections. Warn and/or terminate connections.
+        This is the heart and soul of this class"""
+        # Warned devices no longer found on the system connections
+        # let's get rid of these.
+        for tty in self.remove_ttys:
+            self.remove(tty)
+        # Warned devices found on the system connections.
+        # let's update the status.
+        for tty in self.update_ttys:
+            con = self.get_connection(tty)
+            if con.should_finish():
+                con.terminate()
+                self.remove(tty)
+                con.email(self.config.host, self.config.port, self.config.domain)
             else:
-                count = count + 1
-            PROCS = get_pids(id_pos, name_pos, dev_pos)
-            try:
-                compute(PROCS)
-            except Exception, err:
-                warning("%s -> %s " % (err.__class__ , err))
-            if PRINTINFO == 1:
-                prinfo(PROCS, USR_BY_NAME, GROUP_BY_NAME, NO_BANN, BANN, smtp)
-            sleep(60) # Sleep for 60 seconds
-    except:
-        print "Signal caught. Exiting!"
-        sys.exit(1)
+                if con.should_warn():
+                    self.update(con)
+                else:
+                    self.remove(tty)
+        # New devices found on the system connections.
+        # let's see if any of these needs to be warned
+        for tty in self.new_ttys:
+            con = self.get_connection(tty)
+            if con.should_finish():
+                con.terminate()
+                con.email(self.config.host, self.config.port, self.config.domain)
+                continue
+            if con.should_warn():
+                con.warn()
+                self.add(con, warned=True)
 
-#### End of MAIN :) ####
+    def run(self, debug=False):
+        """Run in a loop for ever"""
+        while True:
+            self._refresh()
+            self._process()
+            if debug:
+                self._show_debug()
+            sleep(60)
+
+    def _show_debug(self):
+        """Show debugging information"""
+        host = self.config.host
+        port = self.config.port
+        domain = self.config.domain
+
+        print "                  <<<<< DEBUG MODE >>>>> "
+        print "---------------------------------------------------------"
+        print "      <<< SMTP DIRECTIVES FROM CONFIG FILE >>>\n"
+        print ("HOST: {0} --> PORT: {1} --> DOMAIN: {2}".format(host, port, domain))
+        print "---------------------------------------------------------"
+        print "      <<< USER DIRECTIVES FROM CONFIG FILE >>>"
+        for key in self.config.get('USERS').keys():
+            print key
+            for x, y in self.config.get('USERS', key).items():
+                print u"\t{0} = {1}".format(x, y)
+        print "---------------------------------------------------------"
+        print "      <<< GROUP DIRECTIVES FROM CONFIG FILE >>>"
+        for key in self.config.get('GROUPS').keys():
+            print key
+            for x, y in self.config.get('GROUPS', key).items():
+                print u"\t{0} = {1}".format(x, y)
+        print "---------------------------------------------------------"
+        print "                  <<< CONNECTIONS >>>"
+        for tty, con in self.connections.items():
+            print("USER: {0} --> DEVICE: {1} --> IDLE TIME: {2}".format(
+                con.user, tty, con.idle_time))
+        print "\n#########################################################"
+        print "            <<< Sleeping for 60 seconds >>> "
+        print "#########################################################\n"
+
 
 if __name__ == "__main__":
+
+    args = parser.parse_args()
+
+    if args.version:
+        print ("idleoutd version is: %s \n" % PRINTVERSION)
+        sys.exit(0)
+
     try:
-        sys.path.append('/etc/idleout')
-        LOG_FLAG = 0
-        pidfile = get_info(LOG_FLAG)
+        config_file = args.config if args.config else CONFIG_FILE
+        config = ConfigHolder(config_file)
+        pidfile = config.get('PIDFILE', 'pid')
+        config.config_logger()
     except Exception, err:
         print ("%s -> %s " % (err.__class__ , err))
         sys.exit(1)
+
     info("<<< Starting Idleout daemon >>>")
-    try:
-        import psyco   # try to speed up :)
-        psyco.full()
-    except ImportError:
-        info("Psyco is not installed, the program will just run a bit slower")
-        pass
-    if PRINTINFO == 1:
+
+    if args.DEBUG:
         info("<<< Idleout daemon started in debug mode >>>")
-        main()
+        try:
+            con_handler = ConnectionHandler(config)
+            con_handler.run(args.DEBUG)
+        except:
+            print "Signal caught. Exiting!"
+            sys.exit(1)
     else:
         try:
             pid = os.fork()
@@ -632,17 +494,14 @@ if __name__ == "__main__":
             os.chdir("/")
         except Exception, err:
             info("%s -> %s " % (err.__class__ , err))
-            pass
         try:
             os.setsid()
         except Exception, err:
             info("%s -> %s " % (err.__class__ , err))
-            pass
         try:
             os.umask(0)
         except Exception, err:
             info("%s -> %s " % (err.__class__ , err))
-            pass
         try:
             pid = os.fork()
             if pid > 0:
@@ -655,5 +514,10 @@ if __name__ == "__main__":
             print >> sys.stderr, "fork 2 failed: %d: %s" % (err.errno, err.strerror)
             fatal("I was unable to fork into a deamon")
             sys.exit(1)
-# Start the daemon
-        main()
+        # Start the daemon
+        try:
+            con_handler = ConnectionHandler(config)
+            con_handler.run(args.DEBUG)
+        except:
+            print "Signal caught. Exiting!"
+            sys.exit(1)
