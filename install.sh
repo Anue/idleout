@@ -22,10 +22,10 @@ if [ ! -f $INITDIR/idleout ]; then
 	[ -x $INITDIR/idleout ] || chmod 755 $INITDIR/idleout
 fi
 
-if [ ! -f $BINDIR/idleoutd ]; then
-	echo "Installing idleoutd --> $BINDIR/idleoutd"
-	cp -f $FILES/idleoutd $BINDIR
-	[ -x $BINDIR/idleoutd ] || chmod 744 $BINDIR/idleoutd
+if [ ! -f $BINDIR/idleoutd.py ]; then
+	echo "Installing idleoutd.py --> $BINDIR/idleoutd.py"
+	cp -f $FILES/idleoutd.py $BINDIR
+	[ -x $BINDIR/idleoutd.py ] || chmod 744 $BINDIR/idleoutd.py
 	echo "Installing usrout --> $BINDIR/usrout"
 	cp -f $FILES/usrout $BINDIR
 	[ -x $BINDIR/usrout ] || chmod 744 $BINDIR/usrout

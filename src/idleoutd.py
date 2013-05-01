@@ -12,7 +12,7 @@
 """
 
 __author__ = "Marcos Moyano"
-__revision__ = "$Id: idleoutd 2013-13-04 $"
+__revision__ = "$Id: idleoutd 2013-01-05 $"
 
 import os
 import sys

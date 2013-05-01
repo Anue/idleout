@@ -17,7 +17,7 @@ logf=`grep -i "^log" /etc/idleout/idleoutconf.py | awk -F= '{print $2}' | cut -f
 start() {
         [ -f $pfile ] && echo "$prog seems to be running ..." && exit 1
         echo -n $"Starting $prog: "
-        /sbin/idleoutd	 	# It's a daemon by nature :) 
+        /sbin/idleoutd.py	 	# It's a daemon by nature :)
         RETVAL=$?
 	if [ $RETVAL -eq 0 ]; then
 		echo -n "                                         [ " && echo -e "\e[32;02m OK \e[m\c " && echo -e " ]"  # Fancy print
