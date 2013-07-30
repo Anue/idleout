@@ -26,9 +26,6 @@ if [ ! -f $BINDIR/idleoutd.py ]; then
 	echo "Installing idleoutd.py --> $BINDIR/idleoutd.py"
 	cp -f $FILES/idleoutd.py $BINDIR
 	[ -x $BINDIR/idleoutd.py ] || chmod 744 $BINDIR/idleoutd.py
-	echo "Installing usrout --> $BINDIR/usrout"
-	cp -f $FILES/usrout $BINDIR
-	[ -x $BINDIR/usrout ] || chmod 744 $BINDIR/usrout
 fi
 
 [ -d $CONFFILE ] || mkdir $CONFFILE
@@ -41,9 +38,7 @@ fi
 
 [ ! -d $MAN ] && mkdir $MAN
 echo "Installing man (1) --> $MAN/idleoutd.1.gz"
-echo "                   --> $MAN/usrout.1.gz"
 cp -f man/idleoutd.1.gz $MAN
-cp -f man/usrout.1.gz $MAN
 
 echo "Installing README files --> $CONFFILE/"
 cp -f doc/README.txt $CONFFILE/

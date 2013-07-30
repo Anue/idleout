@@ -11,8 +11,8 @@
 # See how we were called.
 
 prog="idleout"
-pfile=`grep -i "^pid" /etc/idleout/idleoutconf.py | awk -F= '{print $2}'`
-logf=`grep -i "^log" /etc/idleout/idleoutconf.py | awk -F= '{print $2}' | cut -f 1`
+pfile=`grep -i "^pid" /etc/idleout/idleout.conf | awk -F= '{print $2}'`
+logf=`grep -i "^log" /etc/idleout/idleout.conf | awk -F= '{print $2}' | cut -f 1`
 
 start() {
         [ -f $pfile ] && echo "$prog seems to be running ..." && exit 1

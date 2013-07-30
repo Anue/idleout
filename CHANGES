@@ -1,3 +1,7 @@
+---- Version 0.9.0 ----
+') Complete rewrite of idleoutd.py daemon
+*) Complete restructure of the configuration file
+*) Remove usrout utility
 ---- Version 0.8.1 ----
 *) Removed external log rotation.
 *) Added internal log rotation based on log size.
@@ -24,7 +28,7 @@
 *) Reduce init script. Depends on pidfile.
 *) Added more information about errors and exit conditions.
  ---- Version 0.7 ----
-*) Better parsing for configuration file. 
+*) Better parsing for configuration file.
 *) Added more flexibility to configuration file.
 *) Fix a few bugs to the init script.
 *) Better parsing of command line options for usrout. Done with getopt.
@@ -42,28 +46,28 @@
 *) Added uninstall script
  ---- Version 0.5 ----
 *) Remove logg function to both idleoutd and usrout. Implemented logging through the python logging module.
-*) Added signal handling into debug mode. 
+*) Added signal handling into debug mode.
 *) Try change dir, setsid and umask functions in daemon.
 *) Fix problem with the "*" character in the device section of the finger command. Some distros like SuSE use it.
-*) Replace the string module for buildin functions. 
+*) Replace the string module for buildin functions.
  ---- Version 0.4 ----
 *) Added usrout script. This script was made to logout users from the command line with some flexibility.
 *) Added man pages for idleoutd and usrout.
-*) Added -h or --help parameters for information. 
- ---- Version 0.3 ---- 
+*) Added -h or --help parameters for information.
+ ---- Version 0.3 ----
 *) Better parsing for configuration file.
 *) Better output for the debug mode.
    Split the information into categories.
-*) Better group configuration fetching. 
+*) Better group configuration fetching.
    It doesn't trust the /etc/group file anymore. It will go through the /etc/passwd as well.
-*) Better functionality for group configurated users. 
+*) Better functionality for group configurated users.
    It will fetch the lowest idle configuration for users belonging to different groups.
-*) Removed unnecessary data structures. 
+*) Removed unnecessary data structures.
  ---- Version 0.2 ----
 *) Better parsing for configuration file.
 *) Removed psautolog script. Outside bash script for processes.
 *) Added daemon functionality including pidfile.
 *) Added redundancy to the init script.
-*) Removed unnecessary data structures. 
+*) Removed unnecessary data structures.
  ---- Version 0.1 ----
 *) First release.

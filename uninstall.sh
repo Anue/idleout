@@ -29,8 +29,6 @@ fi
 if [ -f $BINDIR/idleoutd.py then
 	echo "Removing idleoutd.py> $BINDIR/idleoutd.py"
 	rm -f $BINDIR/idleoutd.py
-	echo "Removing usrout --> $BINDIR/usrout"
-	rm -f $BINDIR/usrout
 fi
 
 [ -d $CONFFILE ] || rm -rf $CONFFILE
@@ -38,9 +36,7 @@ fi
 
 if [ -f $MAN/idleoutd.1.gz ]; then
 	echo "Removing (1) --> $MAN/idleoutd.1.gz"
-	echo "             --> $MAN/usrout.1.gz"
 	rm -f $MAN/idleoutd.1.gz
-	rm -f $MAN/usrout.1.gz
 fi
 
 echo "Finishing removing ... "
